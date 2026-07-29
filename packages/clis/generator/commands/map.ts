@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -102,7 +102,7 @@ export const builder = (yargs: Argv) =>
       return true;
     });
 
-export function handler(args: BuilderArguments<typeof builder>) {
+export async function handler(args: BuilderArguments<typeof builder>) {
   const startTime = Date.now();
 
   const types = Array.isArray(args.type) ? args.type : [args.type];
@@ -174,27 +174,32 @@ export function handler(args: BuilderArguments<typeof builder>) {
       'name',
     ];
 
-    for (const type of types.filter(t => t.endsWith('tiles'))) {
-      // write to tmp dir, in case dev server is watching (we don't want crazy
-      // reloads while the file is being written to)
-      const tmpTilesPath = path.join(os.tmpdir(), `${gamePrefix}.${type}`);
-      const tmpTilesLog = path.join(os.tmpdir(), `${gamePrefix}.${type}.log`);
-      const cmd =
-        // min-zoom 4, max-zoom 14.
-        // max-zoom shouldn't be too low, otherwise rounding artifacts will
-        // appear, like rectangles that look like trapezoids.
-        `tippecanoe -Z4 -z13 ` +
-        (args.minAttrs
-          ? minAttributes.map(a => `-y ${a}`).join(' ') + ' '
-          : '') +
-        `-B 4 ` + // -B 4 preserves all points, starting at zoom 4
-        `-b 10` + // -b 10 helps with tile-boundary weirdness
-        ` --force -o ${tmpTilesPath} ${geoJsonPath} ` +
-        `> ${tmpTilesLog} 2>&1`;
+    const tileRuns = types
+      .filter(t => t.endsWith('tiles'))
+      .map(type => {
+        // write to tmp dir, in case dev server is watching (we don't want crazy
+        // reloads while the file is being written to)
+        const tmpTilesPath = path.join(os.tmpdir(), `${gamePrefix}.${type}`);
+        const tmpTilesLog = path.join(os.tmpdir(), `${gamePrefix}.${type}.log`);
+        const cmd =
+          // min-zoom 4, max-zoom 14.
+          // max-zoom shouldn't be too low, otherwise rounding artifacts will
+          // appear, like rectangles that look like trapezoids.
+          `tippecanoe -Z4 -z13 ` +
+          (args.minAttrs
+            ? minAttributes.map(a => `-y ${a}`).join(' ') + ' '
+            : '') +
+          `-B 4 ` + // -B 4 preserves all points, starting at zoom 4
+          `-b 10` + // -b 10 helps with tile-boundary weirdness
+          ` --force -o ${tmpTilesPath} ${geoJsonPath} ` +
+          `> ${tmpTilesLog} 2>&1`;
 
-      logger.log(`running tippecanoe to generate ${type} file...`);
-      logger.info('  ', cmd);
-      execSync(cmd);
+        logger.log(`running tippecanoe to generate ${type} file...`);
+        logger.info('  ', cmd);
+        return runShellCommand(cmd).then(() => ({ type, tmpTilesPath, tmpTilesLog }));
+      });
+    const completedTileRuns = await Promise.all(tileRuns);
+    for (const { type, tmpTilesPath, tmpTilesLog } of completedTileRuns) {
       logger.log(
         '\n',
         'tippecanoe output:\n',
@@ -222,4 +227,16 @@ export function handler(args: BuilderArguments<typeof builder>) {
     'done! time elapsed:',
     `${((endTime - startTime) / 1000).toFixed(1)}s`,
   );
+}
+
+function runShellCommand(cmd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    exec(cmd, err => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
 }
