@@ -96,6 +96,25 @@ export function convertToMapGeoJson(
 
   const normalizeFeature = createNormalizeFeature(map);
 
+  const prefabsWithDescriptions = new Map<string, Prefab>();
+  const missingPrefabDescriptionTokens = new Set<string>();
+  for (const [uid, prefab] of prefabs.entries()) {
+    if (prefabDescriptions.has(prefab.token)) {
+      prefabsWithDescriptions.set(uid, prefab);
+    } else {
+      missingPrefabDescriptionTokens.add(prefab.token);
+    }
+  }
+  if (missingPrefabDescriptionTokens.size > 0) {
+    logger.warn(
+      'skipping',
+      prefabs.size - prefabsWithDescriptions.size,
+      'prefabs with',
+      missingPrefabDescriptionTokens.size,
+      'missing prefab description tokens',
+    );
+  }
+
   const roadQuadTree = quadtree<{
     x: number;
     y: number;
@@ -108,7 +127,7 @@ export function convertToMapGeoJson(
     .y(e => e.y);
   let lutSize = 0;
   const prefabNodeUids = new Set<bigint>(
-    prefabs.values().flatMap(p => {
+    prefabsWithDescriptions.values().flatMap(p => {
       assert(p.nodeUids.every(uid => nodes.has(uid.toString())));
       return p.nodeUids;
     }),
@@ -273,7 +292,7 @@ export function convertToMapGeoJson(
   // Prefabs that have been successfully converted into GeoJSON features
   const prefabAndRoadFeatures: (PrefabFeature | RoadFeature)[] = [];
 
-  for (const p of prefabs.values()) {
+  for (const p of prefabsWithDescriptions.values()) {
     const comps = assertExists(prefabComponents.get(p.token));
     if (!options.skipCoalescing && comps.isVJunction) {
       vJunctionList.add(p);
@@ -567,7 +586,7 @@ export function convertToMapGeoJson(
   const trafficFeatures = createTrafficFeatures(
     map,
     nodes,
-    prefabs,
+    prefabsWithDescriptions,
     prefabDescriptions,
   );
 
