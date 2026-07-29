@@ -7,13 +7,26 @@ import path from 'path';
 import * as process from 'process';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { indexModsFromDirectory } from './game-files/mod-index';
 import { parseMapFiles } from './game-files/map-files-parser';
-import { getLoadOrder } from './game-files/mods-load-order';
+import {
+  getLoadOrder,
+  getLoadOrderFromFile,
+} from './game-files/mods-load-order';
+import {
+  resolveModLoadOrder,
+  type ModConflictPolicy,
+} from './game-files/mods-resolver';
 import { logger } from './logger';
 
 const homeDirectory = os.homedir();
-const untildify = (path: string) =>
-  homeDirectory ? path.replace(/^~(?=$|\/|\\)/, homeDirectory) : path;
+const untildify = (value: string) =>
+  homeDirectory ? value.replace(/^~(?=$|\/|\\)/, homeDirectory) : value;
+const parseModList = (value: string | undefined) =>
+  (value ?? '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
 
 function main() {
   const args = yargs(hideBin(process.argv))
@@ -37,9 +50,40 @@ function main() {
     })
     .option('gameLog', {
       alias: 'l',
-      describe: 'Path to game log file (game.log.txt)',
+      describe: 'Path to game log file (game.log.txt), used to read mod order',
       type: 'string',
       coerce: untildify,
+    })
+    .option('modOrderFile', {
+      describe:
+        'Path to text file with one mod identifier per line in load order (low to high priority)',
+      type: 'string',
+      coerce: untildify,
+    })
+    .option('modOrder', {
+      describe:
+        'Comma-separated explicit mod load order (low to high priority). Supports package names or filenames.',
+      type: 'string',
+    })
+    .option('enabledMods', {
+      describe:
+        'Comma-separated list of mods to include. Supports package names or filenames.',
+      type: 'string',
+    })
+    .option('disabledMods', {
+      describe:
+        'Comma-separated list of mods to exclude. Supports package names or filenames.',
+      type: 'string',
+    })
+    .option('strictModDependencies', {
+      describe: 'Fail when a mod dependency is missing',
+      type: 'boolean',
+      default: false,
+    })
+    .option('modConflictPolicy', {
+      describe: 'How to handle incompatible mods',
+      choices: ['warn', 'error', 'ignore'] as const,
+      default: 'warn' as const,
     })
     .option('outputDir', {
       alias: 'o',
@@ -92,25 +136,40 @@ function main() {
       return path.join(args.gameDir, e.name);
     });
 
-  const modLoadOrder = args.gameLog ? getLoadOrder(args.gameLog) : [];
+  const gameLogModOrder = args.gameLog ? getLoadOrder(args.gameLog) : [];
+  const explicitModOrder = [
+    ...parseModList(args.modOrder),
+    ...(args.modOrderFile ? getLoadOrderFromFile(args.modOrderFile) : []),
+  ];
+  const enabledMods = parseModList(args.enabledMods);
+  const disabledMods = parseModList(args.disabledMods);
 
   let modFilePaths: string[] = [];
   if (args.modsDir) {
-    modFilePaths = fs
-      .readdirSync(args.modsDir, { withFileTypes: true })
-      .filter(
-        e => e.isFile() && (e.name.endsWith('.scs') || e.name.endsWith('.zip')),
-      )
-      .map(e => path.join(args.modsDir!, e.name));
+    const { mods, warnings: indexWarnings } = indexModsFromDirectory(args.modsDir);
+    indexWarnings.forEach(warning => logger.warn(warning));
 
-    if (modLoadOrder.length > 0) {
-      modFilePaths = modFilePaths
-        .filter(e => modLoadOrder.includes(path.parse(e).name))
-        .sort(
-          (a, b) =>
-            modLoadOrder.indexOf(path.parse(a).name) -
-            modLoadOrder.indexOf(path.parse(b).name),
-        );
+    const { orderedMods, warnings: resolverWarnings } = resolveModLoadOrder(mods, {
+      explicitOrder: explicitModOrder,
+      gameLogOrder: gameLogModOrder,
+      enabledMods,
+      disabledMods,
+      strictDependencies: args.strictModDependencies,
+      conflictPolicy: args.modConflictPolicy as ModConflictPolicy,
+    });
+    resolverWarnings.forEach(warning => logger.warn(warning));
+
+    modFilePaths = orderedMods.map(m => m.archivePath);
+    logger.info('using', modFilePaths.length, 'mod archives');
+    if (args.debug) {
+      orderedMods.forEach((mod, idx) =>
+        logger.debug(
+          `${idx.toString().padStart(3, '0')}`,
+          mod.canonicalName,
+          '=>',
+          mod.archivePath,
+        ),
+      );
     }
   }
 

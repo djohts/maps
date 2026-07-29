@@ -1,17 +1,33 @@
 ﻿import fs from 'fs';
 
-export function getLoadOrder(path: string) {
-  const strs = fs.readFileSync(path, { encoding: 'utf8' });
-  const mods: string[] = [];
-  const reg = new RegExp('.*\\[mods] Active local mod (.*) \\(name:.*', 'i');
+const gameLogLoadOrderRegex = /.*\[mods] Active (?:local|steam|workshop) mod (.*) \(name:.*/i;
 
-  for (const str of strs.split('\n')) {
-    if (reg.test(str)) {
-      const mod = reg.exec(str)?.[1];
-      if (mod && !mods.includes(mod)) {
-        mods.push(mod);
-      }
+export function getLoadOrder(gameLogPath: string) {
+  const lines = fs.readFileSync(gameLogPath, { encoding: 'utf8' }).split('\n');
+  const mods: string[] = [];
+
+  for (const line of lines) {
+    const mod = gameLogLoadOrderRegex.exec(line)?.[1]?.trim();
+    if (!mod || mods.includes(mod)) {
+      continue;
     }
+    mods.push(mod);
   }
+
+  return mods;
+}
+
+export function getLoadOrderFromFile(loadOrderPath: string) {
+  const lines = fs.readFileSync(loadOrderPath, { encoding: 'utf8' }).split('\n');
+  const mods: string[] = [];
+
+  for (const line of lines) {
+    const mod = line.replace(/(#|\/\/).*$/, '').trim();
+    if (!mod || mods.includes(mod)) {
+      continue;
+    }
+    mods.push(mod);
+  }
+
   return mods;
 }

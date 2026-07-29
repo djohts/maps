@@ -51,6 +51,12 @@ npx parser -g pathToGameDirectory -m pathToModDirectory -o dirToWriteFilesTo
 | -g              | --gameDir    | None          | Path to ATS/ETS2 game dir (the one with all the .scs files)       |
 | -m              | --modsDir    | None          | Path to ATS/ETS2 mods dir (the one with all the mods files)       |
 | -l              | --gameLog    | None          | Path to game log file (game.log.txt), used to read mod load order |
+| (Not available) | --modOrderFile | None        | Path to newline-delimited mod order file (low to high priority)   |
+| (Not available) | --modOrder   | None          | Comma-separated explicit mod order (low to high priority)         |
+| (Not available) | --enabledMods | None         | Comma-separated list of mods to include                           |
+| (Not available) | --disabledMods | None        | Comma-separated list of mods to exclude                           |
+| (Not available) | --strictModDependencies | False | Fail when a mod dependency is missing                          |
+| (Not available) | --modConflictPolicy | warn    | How to handle incompatible mods: warn, error, or ignore           |
 | -o              | --outputDir  | None          | Path to dir JSON files should be written to                       |
 | (Not available) | --includeDlc | True          | Whether include DLC files or not                                  |
 | (Not available) | --onlyDefs   | False         | Parse data from /def files, only                                  |
@@ -58,6 +64,25 @@ npx parser -g pathToGameDirectory -m pathToModDirectory -o dirToWriteFilesTo
 | (Not available) | --debug      | False         | Set debug mode to print more messages                             |
 
 Parsing can take a couple of minutes, depending on the machine and the installed map DLCs and installed mods.
+
+### Mod compatibility and load-order behavior
+
+`parser` now follows a ts-map-style layering model:
+
+1. Base game archives are loaded first.
+2. DLC archives are layered on top of base files.
+3. Mods are layered last, using resolved load order.
+4. For collisions at the same file path, later layers override earlier ones ("last wins").
+
+Mod order resolution combines:
+
+- explicit order (`--modOrder`, `--modOrderFile`)
+- game log order (`--gameLog`)
+- manifest dependency constraints (`manifest.sii`)
+- deterministic fallback ordering for unlisted mods
+
+Mod discovery is manifest-aware and recursive: `--modsDir` is scanned recursively for
+`.scs` and `.zip` archives to support nested and workshop-style mod layouts.
 
 > [!NOTE]
 >
