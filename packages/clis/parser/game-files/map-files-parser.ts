@@ -230,7 +230,7 @@ export function parseSectorFiles(
       const sectorKey = f.replace(/\.(base|aux)$/, '');
       if (!sectorRegex.test(sectorKey)) {
         logger.error(`unexpected sector key "${sectorKey}"`);
-        error = true;
+        failedFiles++;
         bar.increment({ filename: f });
         continue;
       }
@@ -240,7 +240,7 @@ export function parseSectorFiles(
       );
       if (isNaN(sectorX) || isNaN(sectorY)) {
         logger.error(`couldn't parse ${sectorX} or ${sectorY}`);
-        error = true;
+        failedFiles++;
         bar.increment({ filename: f });
         continue;
       }
