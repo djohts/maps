@@ -28,7 +28,7 @@ const parseModList = (value: string | undefined) =>
     .map(v => v.trim())
     .filter(Boolean);
 
-function main() {
+async function main() {
   const args = yargs(hideBin(process.argv))
     .wrap(yargs().terminalWidth()) // Use full width of wide terminals.
     .usage(
@@ -178,7 +178,11 @@ function main() {
     }
   }
 
-  const { map, ...result } = parseMapFiles(gameFilePaths, modFilePaths, args);
+  const { map, ...result } = await parseMapFiles(
+    gameFilePaths,
+    modFilePaths,
+    args,
+  );
 
   if (args.dryRun) {
     logger.success('dry run complete.');
@@ -249,4 +253,7 @@ interface BigIntWithToJSON extends BigInt {
   return this.toString(16);
 };
 
-main();
+main().catch(error => {
+  logger.error(error);
+  process.exitCode = 1;
+});

@@ -34,7 +34,9 @@ import type {
   Trigger,
 } from '@truckermudgeon/map/types';
 import * as cliProgress from 'cli-progress';
+import os from 'os';
 import path from 'path';
+import { Worker } from 'worker_threads';
 import { logger } from '../logger';
 import { CombinedEntries } from './combined-entries';
 import { convertSiiToJson } from './convert-sii-to-json';
@@ -49,7 +51,7 @@ import {
   VersionSiiSchema,
 } from './sii-schemas';
 
-export function parseMapFiles(
+export async function parseMapFiles(
   gameFilePaths: string[],
   modFilePaths: string[],
   {
@@ -57,7 +59,7 @@ export function parseMapFiles(
   }: {
     onlyDefs: boolean;
   },
-):
+): Promise<
   | {
       onlyDefs: false;
       map: string;
@@ -68,11 +70,12 @@ export function parseMapFiles(
       onlyDefs: true;
       map: string;
       defData: DefData;
-    } {
+    }
+> {
   let version: ReturnType<typeof parseVersionSii>;
   let l10n = new Map<string, string>();
   let icons: ReturnType<typeof parseIconMatFiles> = new Map<string, Buffer>();
-  let sectorData: ReturnType<typeof parseSectorFiles> = {
+  let sectorData: Awaited<ReturnType<typeof parseSectorFiles>> = {
     map: '',
     sectors: new Map<
       string,
@@ -106,7 +109,7 @@ export function parseMapFiles(
       // TODO: find a solution to handle icons with same name between different mods
       icons = parseIconMatFiles(gameEntries);
 
-      sectorData = parseSectorFiles(gameEntries, version.application);
+      sectorData = await parseSectorFiles(gameEntries, version.application);
     }
   } finally {
     gameArchives.forEach(a => a.dispose());
@@ -130,7 +133,10 @@ export function parseMapFiles(
         // TODO: find a solution to handle icons with same name between different mods
         modIcons.forEach((v, k) => icons.set(k, v));
 
-        const modSectorData = parseSectorFiles(modEntry, version.application);
+        const modSectorData = await parseSectorFiles(
+          modEntry,
+          version.application,
+        );
         modSectorData.sectors.forEach((v, k) => sectorData.sectors.set(k, v));
 
         if (modSectorData.parsedFiles === 0 && modSectorData.failedFiles > 0) {
@@ -179,7 +185,212 @@ function parseVersionSii(entries: Entries) {
   return { application, version };
 }
 
-export function parseSectorFiles(
+type ParsedSector = ReturnType<typeof parseSector>;
+
+interface SectorParserWorkerTask {
+  taskId: number;
+  data: Uint8Array;
+}
+
+interface SectorParserWorkerResultError {
+  taskId: number;
+  error: {
+    name?: string;
+    message: string;
+    stack?: string;
+  };
+}
+
+interface SectorParserWorkerResultSuccess {
+  taskId: number;
+  sector: ParsedSector;
+}
+
+type SectorParserWorkerResult =
+  | SectorParserWorkerResultError
+  | SectorParserWorkerResultSuccess;
+
+interface QueuedSectorTask {
+  taskId: number;
+  data: Uint8Array;
+  resolve: (sector: ParsedSector) => void;
+  reject: (error: Error) => void;
+}
+
+const maxSectorParserWorkers = 8;
+const maxTasksPerWorker = 2;
+
+class SectorParserWorkerPool {
+  private readonly workers: Worker[] = [];
+  private readonly idleWorkers = new Set<Worker>();
+  private readonly queuedTasks: QueuedSectorTask[] = [];
+  private readonly taskByWorker = new Map<Worker, QueuedSectorTask>();
+  private nextTaskId = 0;
+  private fatalError: Error | undefined;
+  private disposing = false;
+
+  constructor(workerCount: number) {
+    for (let i = 0; i < workerCount; i++) {
+      this.addWorker(i);
+    }
+  }
+
+  parse(buffer: Buffer): Promise<ParsedSector> {
+    if (this.fatalError) {
+      return Promise.reject(this.fatalError);
+    }
+
+    const data = new Uint8Array(
+      buffer.buffer,
+      buffer.byteOffset,
+      buffer.byteLength,
+    );
+    return new Promise<ParsedSector>((resolve, reject) => {
+      this.queuedTasks.push({
+        taskId: this.nextTaskId++,
+        data,
+        resolve,
+        reject,
+      });
+      this.schedule();
+    });
+  }
+
+  async dispose() {
+    this.disposing = true;
+    this.rejectAllQueued(new Error('sector parser worker pool disposed'));
+    await Promise.all(this.workers.map(worker => worker.terminate()));
+  }
+
+  private addWorker(index: number) {
+    const worker = new Worker(
+      new URL('./sector-parser-worker.ts', import.meta.url),
+      {
+        name: `sector-parser-${index + 1}`,
+      },
+    );
+    worker.on('message', message => {
+      this.handleWorkerMessage(worker, message as SectorParserWorkerResult);
+    });
+    worker.on('error', error => {
+      this.handleWorkerFailure(worker, error);
+    });
+    worker.on('exit', code => {
+      if (this.disposing || code === 0) {
+        return;
+      }
+      this.handleWorkerFailure(
+        worker,
+        new Error(`sector parser worker exited with code ${code}`),
+      );
+    });
+    this.workers.push(worker);
+    this.idleWorkers.add(worker);
+  }
+
+  private handleWorkerMessage(worker: Worker, message: SectorParserWorkerResult) {
+    const task = this.taskByWorker.get(worker);
+    if (!task) {
+      return;
+    }
+
+    this.taskByWorker.delete(worker);
+    this.idleWorkers.add(worker);
+
+    if ('error' in message) {
+      const error = new Error(message.error.message);
+      if (message.error.name) {
+        error.name = message.error.name;
+      }
+      if (message.error.stack) {
+        error.stack = message.error.stack;
+      }
+      task.reject(error);
+    } else {
+      task.resolve(message.sector);
+    }
+
+    this.schedule();
+  }
+
+  private handleWorkerFailure(worker: Worker, error: Error) {
+    if (this.disposing) {
+      return;
+    }
+    if (!this.fatalError) {
+      this.fatalError = error;
+    }
+
+    this.idleWorkers.delete(worker);
+    const inFlightTask = this.taskByWorker.get(worker);
+    if (inFlightTask) {
+      this.taskByWorker.delete(worker);
+      inFlightTask.reject(this.fatalError);
+    }
+    this.rejectAllQueued(this.fatalError);
+  }
+
+  private rejectAllQueued(error: Error) {
+    while (this.queuedTasks.length > 0) {
+      const task = this.queuedTasks.shift();
+      if (!task) {
+        continue;
+      }
+      task.reject(error);
+    }
+  }
+
+  private schedule() {
+    if (this.fatalError) {
+      return;
+    }
+
+    for (const worker of this.idleWorkers) {
+      const nextTask = this.queuedTasks.shift();
+      if (!nextTask) {
+        break;
+      }
+      this.idleWorkers.delete(worker);
+      this.taskByWorker.set(worker, nextTask);
+      worker.postMessage(
+        {
+          taskId: nextTask.taskId,
+          data: nextTask.data,
+        } satisfies SectorParserWorkerTask,
+        [nextTask.data.buffer],
+      );
+    }
+  }
+}
+
+function getSectorParserWorkerCount(totalFiles: number) {
+  if (totalFiles <= 1) {
+    return 1;
+  }
+
+  const configured = process.env.PARSER_SECTOR_WORKERS?.trim();
+  if (configured) {
+    const parsed = Number.parseInt(configured, 10);
+    if (Number.isNaN(parsed) || parsed <= 0) {
+      logger.warn(
+        `invalid PARSER_SECTOR_WORKERS value "${configured}", using single-threaded sector parsing`,
+      );
+      return 1;
+    }
+    return Math.max(1, Math.min(totalFiles, parsed));
+  }
+
+  const availableParallelism =
+    typeof os.availableParallelism === 'function'
+      ? os.availableParallelism()
+      : os.cpus().length;
+  return Math.max(
+    1,
+    Math.min(totalFiles, Math.min(maxSectorParserWorkers, availableParallelism - 1)),
+  );
+}
+
+export async function parseSectorFiles(
   entries: Entries,
   application: 'ats' | 'eut2',
 ) {
@@ -225,66 +436,105 @@ export function parseSectorFiles(
     );
     bar.start(baseFiles.length, 0);
 
-    const sectorRegex = /^sec([+-]\d{4})([+-]\d{4})$/;
-    for (const f of baseFiles) {
-      const sectorKey = f.replace(/\.(base|aux)$/, '');
-      if (!sectorRegex.test(sectorKey)) {
-        logger.error(`unexpected sector key "${sectorKey}"`);
-        failedFiles++;
-        bar.increment({ filename: f });
-        continue;
-      }
-      const [, sectorX, sectorY] = Array.from(
-        assertExists(sectorRegex.exec(sectorKey)),
-        parseFloat,
-      );
-      if (isNaN(sectorX) || isNaN(sectorY)) {
-        logger.error(`couldn't parse ${sectorX} or ${sectorY}`);
-        failedFiles++;
-        bar.increment({ filename: f });
-        continue;
-      }
-
-      const baseFile = entries.files.get(`map/${map}/${f}`);
-      if (!baseFile) {
-        bar.increment({ filename: f });
-        continue;
-      }
-
-      const { items, nodes } = putIfAbsent(
-        sectorKey,
-        { items: new Map<bigint, Item>(), nodes: new Map<bigint, Node>() },
-        sectors,
-      );
+    const workerCount = getSectorParserWorkerCount(baseFiles.length);
+    let workerPool: SectorParserWorkerPool | undefined;
+    if (workerCount > 1) {
       try {
-        const buffer = baseFile.read();
-        const sector = parseSector(buffer);
-        if (!sector) {
-          bar.increment({ filename: f });
-          continue;
-        }
-        parsedFiles++;
-
-        sector.items.forEach(item => {
-          items.set(item.uid, { ...item, sectorX, sectorY });
-        });
-        sector.nodes.forEach(item => {
-          nodes.set(item.uid, { ...item, sectorX, sectorY });
-        });
-      } catch(e) {
-        bar.increment({ filename: f });
-        failedFiles++;
-        if (e instanceof Error && e.message.startsWith('Unknown version')) {
-          logger.warn(
-            `skipping incompatible sector file map/${map}/${f}: ${e.message}`,
-          );
-        } else {
-          logger.error(`error parsing sector file`, `map/${map}/${f}`, e);
-        }
-        continue;
+        workerPool = new SectorParserWorkerPool(workerCount);
+        logger.info(
+          `using ${workerCount} worker threads for ${map} sector parsing`,
+        );
+      } catch (e) {
+        logger.warn(
+          `failed to initialize sector parser workers for ${map}; falling back to single-threaded parsing`,
+          e,
+        );
       }
-      bar.increment({ filename: f });
     }
+
+    const maxInFlightTasks = workerPool ? workerCount * maxTasksPerWorker : 1;
+    const pendingTasks = new Set<Promise<void>>();
+    const trackTask = (task: Promise<void>) => {
+      pendingTasks.add(task);
+      task.finally(() => pendingTasks.delete(task));
+    };
+
+    const sectorRegex = /^sec([+-]\d{4})([+-]\d{4})$/;
+    try {
+      for (const f of baseFiles) {
+        while (pendingTasks.size >= maxInFlightTasks) {
+          await Promise.race(pendingTasks);
+        }
+
+        trackTask(
+          (async () => {
+            const sectorPath = `map/${map}/${f}`;
+            try {
+              const sectorKey = f.replace(/\.(base|aux)$/, '');
+              if (!sectorRegex.test(sectorKey)) {
+                logger.error(`unexpected sector key "${sectorKey}"`);
+                failedFiles++;
+                return;
+              }
+
+              const [, sectorX, sectorY] = Array.from(
+                assertExists(sectorRegex.exec(sectorKey)),
+                parseFloat,
+              );
+              if (isNaN(sectorX) || isNaN(sectorY)) {
+                logger.error(`couldn't parse ${sectorX} or ${sectorY}`);
+                failedFiles++;
+                return;
+              }
+
+              const baseFile = entries.files.get(sectorPath);
+              if (!baseFile) {
+                return;
+              }
+
+              const { items, nodes } = putIfAbsent(
+                sectorKey,
+                {
+                  items: new Map<bigint, Item>(),
+                  nodes: new Map<bigint, Node>(),
+                },
+                sectors,
+              );
+              const buffer = baseFile.read();
+              const sector = workerPool
+                ? await workerPool.parse(buffer)
+                : parseSector(buffer);
+              if (!sector) {
+                return;
+              }
+              parsedFiles++;
+
+              sector.items.forEach(item => {
+                items.set(item.uid, { ...item, sectorX, sectorY });
+              });
+              sector.nodes.forEach(item => {
+                nodes.set(item.uid, { ...item, sectorX, sectorY });
+              });
+            } catch (e) {
+              failedFiles++;
+              if (e instanceof Error && e.message.startsWith('Unknown version')) {
+                logger.warn(
+                  `skipping incompatible sector file ${sectorPath}: ${e.message}`,
+                );
+              } else {
+                logger.error(`error parsing sector file`, sectorPath, e);
+              }
+            } finally {
+              bar.increment({ filename: f });
+            }
+          })(),
+        );
+      }
+      await Promise.all(pendingTasks);
+    } finally {
+      await workerPool?.dispose();
+    }
+
     logger.success(
       'parsed',
       baseFiles.length,
