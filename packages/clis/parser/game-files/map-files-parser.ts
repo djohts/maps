@@ -78,6 +78,8 @@ export function parseMapFiles(
       string,
       { items: Map<bigint, Item>; nodes: Map<bigint, Node> }
     >(),
+    parsedFiles: 0,
+    failedFiles: 0,
   };
   let defData: ReturnType<typeof parseDefFiles>;
 
@@ -131,7 +133,7 @@ export function parseMapFiles(
         const modSectorData = parseSectorFiles(modEntry, version.application);
         modSectorData.sectors.forEach((v, k) => sectorData.sectors.set(k, v));
 
-        if (modSectorData.error) {
+        if (modSectorData.parsedFiles === 0 && modSectorData.failedFiles > 0) {
           failure++;
         } else {
           success++;
@@ -198,7 +200,8 @@ export function parseSectorFiles(
     return { map: '', sectors };
   }
 
-  let error = false;
+  let parsedFiles = 0;
+  let failedFiles = 0;
   for (const map of maps) {
     const sectorRoot = entries.directories.get(`map/${map}`);
     if (!sectorRoot) {
@@ -260,6 +263,7 @@ export function parseSectorFiles(
           bar.increment({ filename: f });
           continue;
         }
+        parsedFiles++;
 
         sector.items.forEach(item => {
           items.set(item.uid, { ...item, sectorX, sectorY });
@@ -269,8 +273,14 @@ export function parseSectorFiles(
         });
       } catch(e) {
         bar.increment({ filename: f });
-        error = true;
-        logger.error(`error parsing sector file`, `map/${map}/${f}`, e);
+        failedFiles++;
+        if (e instanceof Error && e.message.startsWith('Unknown version')) {
+          logger.warn(
+            `skipping incompatible sector file map/${map}/${f}: ${e.message}`,
+          );
+        } else {
+          logger.error(`error parsing sector file`, `map/${map}/${f}`, e);
+        }
         continue;
       }
       bar.increment({ filename: f });
@@ -288,7 +298,8 @@ export function parseSectorFiles(
   return {
     map: `${maps.join('+')}`,
     sectors,
-    error: error,
+    parsedFiles,
+    failedFiles,
   };
 }
 
