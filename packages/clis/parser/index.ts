@@ -255,5 +255,5 @@ interface BigIntWithToJSON extends BigInt {
 
 main().catch(error => {
   logger.error(error);
-  process.exitCode = 1;
+  process.exit(1);
 });

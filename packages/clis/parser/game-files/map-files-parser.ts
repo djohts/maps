@@ -1,7 +1,7 @@
 import { assertExists } from '@truckermudgeon/base/assert';
 import { distance } from '@truckermudgeon/base/geom';
 import { putIfAbsent } from '@truckermudgeon/base/map';
-import { Preconditions, UnreachableError } from '@truckermudgeon/base/precon';
+import { UnreachableError } from '@truckermudgeon/base/precon';
 import {
   ItemType,
   MapOverlayType,
@@ -357,7 +357,7 @@ class SectorParserWorkerPool {
           taskId: nextTask.taskId,
           data: nextTask.data,
         } satisfies SectorParserWorkerTask,
-        [nextTask.data.buffer],
+        [nextTask.data.buffer as ArrayBuffer],
       );
     }
   }
@@ -368,7 +368,7 @@ function getSectorParserWorkerCount(totalFiles: number) {
     return 1;
   }
 
-  const configured = process.env.PARSER_SECTOR_WORKERS?.trim();
+  const configured = process.env['PARSER_SECTOR_WORKERS']?.trim();
   if (configured) {
     const parsed = Number.parseInt(configured, 10);
     if (Number.isNaN(parsed) || parsed <= 0) {
@@ -456,7 +456,7 @@ export async function parseSectorFiles(
     const pendingTasks = new Set<Promise<void>>();
     const trackTask = (task: Promise<void>) => {
       pendingTasks.add(task);
-      task.finally(() => pendingTasks.delete(task));
+      void task.finally(() => pendingTasks.delete(task));
     };
 
     const sectorRegex = /^sec([+-]\d{4})([+-]\d{4})$/;
@@ -715,7 +715,7 @@ export function parseIconMatFiles(entries: Entries) {
 
 export function postProcess(
   defData: ReturnType<typeof parseDefFiles>,
-  { sectors, map }: ReturnType<typeof parseSectorFiles>,
+  { sectors, map }: Awaited<ReturnType<typeof parseSectorFiles>>,
   icons: ReturnType<typeof parseIconMatFiles>,
   l10n: Map<string, string>,
 ): { map: string; mapData: MapData; icons: Map<string, Buffer> } {
@@ -1409,14 +1409,12 @@ function toDealerLabel(prefabPath: string): string {
     logger.warn('Unexpected prefab path for truck dealer:', prefabPath);
     return 'Unknown Dealer';
   }
-  
-  const dealerRegex = /\/truck_dealer\/(?:truck_dealer_([^.]+).ppd$|([^\/]+)\/)/;
+  const dealerRegex = /\/truck_dealer\/(?:truck_dealer_([^.]+).ppd$|([^/]+)\/)/;
   const matches = dealerRegex.exec(prefabPath);
   if (!matches) {
     logger.warn('Could not extract dealer from path:', prefabPath);
     return 'Unknown Dealer';
   }
-  
   const dealer = matches[1] ?? matches[2];
   if (!dealer) {
     logger.warn('Empty dealer code from path:', prefabPath);
