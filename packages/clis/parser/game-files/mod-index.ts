@@ -1,9 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { convertSiiToJson } from './convert-sii-to-json';
-import { AnySiiSchema } from './sii-schemas';
 import type { Entries } from './scs-archive';
 import { ScsArchive } from './scs-archive';
+import { AnySiiSchema } from './sii-schemas';
 
 const archiveExtensions = new Set(['.scs', '.zip']);
 const manifestCandidatePaths = [
@@ -94,7 +94,7 @@ export function indexModArchives(archivePaths: string[]): ModIndexResult {
         manifestPath: metadata?.manifestPath,
       });
     } catch (e) {
-      const message = e instanceof Error ? e.message : `${e}`;
+      const message = e instanceof Error ? e.message : String(e);
       warnings.push(`ignoring unreadable archive ${archivePath}: ${message}`);
     } finally {
       archive.dispose();
@@ -121,12 +121,12 @@ function readManifestMetadata(entries: Entries): ManifestMetadata | undefined {
 
     return {
       manifestPath: candidatePath,
-      packageName: toStringOrUndefined(modPackage.packageName),
+      packageName: toStringOrUndefined(modPackage['packageName']),
       displayName:
-        toStringOrUndefined(modPackage.displayName) ??
-        toStringOrUndefined(modPackage.packageName),
-      dependencies: uniqueStrings(toStringArray(modPackage.dependencies)),
-      incompatible: uniqueStrings(toStringArray(modPackage.incompatible)),
+        toStringOrUndefined(modPackage['displayName']) ??
+        toStringOrUndefined(modPackage['packageName']),
+      dependencies: uniqueStrings(toStringArray(modPackage['dependencies'])),
+      incompatible: uniqueStrings(toStringArray(modPackage['incompatible'])),
     };
   }
 
@@ -149,10 +149,10 @@ function findModPackage(parsed: Record<string, unknown>) {
 
   for (const candidate of candidates) {
     if (
-      candidate.packageName != null ||
-      candidate.displayName != null ||
-      candidate.dependencies != null ||
-      candidate.incompatible != null
+      candidate['packageName'] != null ||
+      candidate['displayName'] != null ||
+      candidate['dependencies'] != null ||
+      candidate['incompatible'] != null
     ) {
       return candidate;
     }

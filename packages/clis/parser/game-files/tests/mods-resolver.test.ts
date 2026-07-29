@@ -1,8 +1,5 @@
 import type { IndexedMod } from '../mod-index';
-import {
-  normalizeModReference,
-  resolveModLoadOrder,
-} from '../mods-resolver';
+import { normalizeModReference, resolveModLoadOrder } from '../mods-resolver';
 
 const createMod = (
   name: string,

@@ -110,9 +110,7 @@ export function resolveModLoadOrder(
       }
 
       const selectedDependency = matched[0];
-      dependencyEdges
-        .get(selectedDependency.archivePath)
-        ?.add(mod.archivePath);
+      dependencyEdges.get(selectedDependency.archivePath)?.add(mod.archivePath);
     }
 
     for (const incompatible of mod.incompatible) {
@@ -285,10 +283,7 @@ function stableTopologicalSort(
 
   for (const toSet of edges.values()) {
     for (const toArchivePath of toSet) {
-      indegrees.set(
-        toArchivePath,
-        (indegrees.get(toArchivePath) ?? 0) + 1,
-      );
+      indegrees.set(toArchivePath, (indegrees.get(toArchivePath) ?? 0) + 1);
     }
   }
 

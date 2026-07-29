@@ -7,8 +7,8 @@ import path from 'path';
 import * as process from 'process';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import { indexModsFromDirectory } from './game-files/mod-index';
 import { parseMapFiles } from './game-files/map-files-parser';
+import { indexModsFromDirectory } from './game-files/mod-index';
 import {
   getLoadOrder,
   getLoadOrderFromFile,
@@ -146,17 +146,22 @@ function main() {
 
   let modFilePaths: string[] = [];
   if (args.modsDir) {
-    const { mods, warnings: indexWarnings } = indexModsFromDirectory(args.modsDir);
+    const { mods, warnings: indexWarnings } = indexModsFromDirectory(
+      args.modsDir,
+    );
     indexWarnings.forEach(warning => logger.warn(warning));
 
-    const { orderedMods, warnings: resolverWarnings } = resolveModLoadOrder(mods, {
-      explicitOrder: explicitModOrder,
-      gameLogOrder: gameLogModOrder,
-      enabledMods,
-      disabledMods,
-      strictDependencies: args.strictModDependencies,
-      conflictPolicy: args.modConflictPolicy as ModConflictPolicy,
-    });
+    const { orderedMods, warnings: resolverWarnings } = resolveModLoadOrder(
+      mods,
+      {
+        explicitOrder: explicitModOrder,
+        gameLogOrder: gameLogModOrder,
+        enabledMods,
+        disabledMods,
+        strictDependencies: args.strictModDependencies,
+        conflictPolicy: args.modConflictPolicy as ModConflictPolicy,
+      },
+    );
     resolverWarnings.forEach(warning => logger.warn(warning));
 
     modFilePaths = orderedMods.map(m => m.archivePath);

@@ -1,6 +1,7 @@
 ﻿import fs from 'fs';
 
-const gameLogLoadOrderRegex = /.*\[mods] Active (?:local|steam|workshop) mod (.*) \(name:.*/i;
+const gameLogLoadOrderRegex =
+  /.*\[mods] Active (?:local|steam|workshop) mod (.*) \(name:.*/i;
 
 export function getLoadOrder(gameLogPath: string) {
   const lines = fs.readFileSync(gameLogPath, { encoding: 'utf8' }).split('\n');
@@ -18,7 +19,9 @@ export function getLoadOrder(gameLogPath: string) {
 }
 
 export function getLoadOrderFromFile(loadOrderPath: string) {
-  const lines = fs.readFileSync(loadOrderPath, { encoding: 'utf8' }).split('\n');
+  const lines = fs
+    .readFileSync(loadOrderPath, { encoding: 'utf8' })
+    .split('\n');
   const mods: string[] = [];
 
   for (const line of lines) {
